@@ -1,0 +1,5 @@
+{
+  "name": "AI Smart Grader (Doubao)",
+  "description": "An intelligent assignment grading system that analyzes Word, Excel, and PDF documents using Doubao (Volcengine) AI.",
+  "requestFramePermissions": []
+}
