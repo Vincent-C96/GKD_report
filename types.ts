@@ -51,16 +51,25 @@ export interface BatchItem {
 }
 
 // AI Configuration Types
-export type AIProvider = 'gemini' | 'doubao';
+export type AIProvider = 'gemini' | 'doubao' | 'deepseek' | 'kimi' | 'openai' | 'custom';
 
 export interface AIConfig {
   provider: AIProvider;
-  doubaoEndpointId?: string; // e.g. ep-2025...
-  proxyUrl?: string; // To bypass CORS
+  apiKey?: string;       // User provided API Key for 3rd party
+  baseUrl?: string;      // API Base URL
+  modelName?: string;    // Model ID (or Endpoint ID for Doubao)
+  proxyUrl?: string;     // To bypass CORS
 }
 
 export interface GradeOptions {
   minScore: number;
   maxScore: number;
   aiConfig: AIConfig;
+}
+
+// Instructor Signature Settings
+export interface InstructorSettings {
+  mode: 'text' | 'image';
+  name: string;      // The text name
+  imageData?: string; // Base64 data URL for the image
 }

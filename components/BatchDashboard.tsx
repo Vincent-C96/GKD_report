@@ -1,5 +1,5 @@
 import React from 'react';
-import { BatchItem } from '../types';
+import { BatchItem, InstructorSettings } from '../types';
 import { annotateAndDownloadFile, downloadBatchAsZip } from '../services/fileService';
 import { 
   CheckCircle, 
@@ -10,16 +10,18 @@ import {
   Download,
   Eye,
   Archive,
-  ArrowRight
+  RefreshCw
 } from 'lucide-react';
 
 interface BatchDashboardProps {
   items: BatchItem[];
+  instructorSettings: InstructorSettings;
   onViewDetails: (id: string) => void;
   onReset: () => void;
+  onRetry: (id: string) => void;
 }
 
-const BatchDashboard: React.FC<BatchDashboardProps> = ({ items, onViewDetails, onReset }) => {
+const BatchDashboard: React.FC<BatchDashboardProps> = ({ items, instructorSettings, onViewDetails, onReset, onRetry }) => {
   
   const completedItems = items.filter(i => i.status === 'completed' && i.result);
   const isProcessing = items.some(i => i.status === 'processing' || i.status === 'queued');
@@ -31,14 +33,14 @@ const BatchDashboard: React.FC<BatchDashboardProps> = ({ items, onViewDetails, o
     // If only one file is completed, download it directly (no zip)
     if (completedItems.length === 1) {
         const item = completedItems[0];
-        await annotateAndDownloadFile(item.file, item.result!);
+        await annotateAndDownloadFile(item.file, item.result!, instructorSettings);
     } else {
         // Otherwise, zip them up
         const toDownload = completedItems.map(item => ({
             file: item.file,
             result: item.result!
         }));
-        await downloadBatchAsZip(toDownload);
+        await downloadBatchAsZip(toDownload, instructorSettings);
     }
   };
 
@@ -138,6 +140,17 @@ const BatchDashboard: React.FC<BatchDashboardProps> = ({ items, onViewDetails, o
                         </td>
                         <td className="py-4 px-6 text-right">
                             <div className="flex justify-end gap-2">
+                                {/* Retry Button - especially for failures */}
+                                {(item.status === 'error' || item.status === 'completed') && (
+                                    <button 
+                                        onClick={() => onRetry(item.id)}
+                                        className="p-2 text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
+                                        title={item.status === 'error' ? "Retry Processing" : "Re-grade"}
+                                    >
+                                        <RefreshCw className="w-5 h-5" />
+                                    </button>
+                                )}
+
                                 {item.status === 'completed' && item.result && (
                                     <>
                                         <button 
@@ -148,7 +161,7 @@ const BatchDashboard: React.FC<BatchDashboardProps> = ({ items, onViewDetails, o
                                             <Eye className="w-5 h-5" />
                                         </button>
                                         <button 
-                                            onClick={() => annotateAndDownloadFile(item.file, item.result!)}
+                                            onClick={() => annotateAndDownloadFile(item.file, item.result!, instructorSettings)}
                                             className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
                                             title="Download Annotated File"
                                         >

@@ -1,11 +1,14 @@
-import React, { useState, useEffect } from 'react';
-import { GradingResult, BatchItem, AIProvider, AIConfig } from './types';
+import React, { useState, useEffect, useRef } from 'react';
+import { GradingResult, BatchItem, AIProvider, AIConfig, InstructorSettings } from './types';
 import FileUpload from './components/FileUpload';
 import ResultDashboard from './components/ResultDashboard';
 import BatchDashboard from './components/BatchDashboard';
 import { extractTextFromFile } from './services/fileService';
 import { gradeDocument } from './services/geminiService';
-import { GraduationCap, Settings, Bot, Network, Key } from 'lucide-react';
+import { GraduationCap, Settings, Bot, Network, Key, Server, Cpu, PenTool, Image as ImageIcon, Type } from 'lucide-react';
+
+// Number of files to process simultaneously
+const CONCURRENT_LIMIT = 3;
 
 const App: React.FC = () => {
   const [batchItems, setBatchItems] = useState<BatchItem[]>([]);
@@ -16,12 +19,49 @@ const App: React.FC = () => {
   const [minScore, setMinScore] = useState<number>(0);
   const [maxScore, setMaxScore] = useState<number>(100);
 
-  // AI Settings
+  // Instructor Settings
+  const [instructorMode, setInstructorMode] = useState<'text' | 'image'>('text');
+  const [instructorName, setInstructorName] = useState<string>('AI Grader');
+  const [instructorImage, setInstructorImage] = useState<string>('');
+
+  // AI Settings State
   const [aiProvider, setAiProvider] = useState<AIProvider>('gemini');
-  const [doubaoEndpoint, setDoubaoEndpoint] = useState<string>('ep-20250212093506-69677');
+  const [apiKey, setApiKey] = useState<string>('');
+  
+  // Advanced settings (Hidden for standard providers)
+  const [baseUrl, setBaseUrl] = useState<string>('');
+  const [modelName, setModelName] = useState<string>('');
   const [proxyUrl, setProxyUrl] = useState<string>(''); 
 
-  // When files are selected, add them to the queue
+  // Pre-fill defaults
+  useEffect(() => {
+      if (aiProvider === 'gemini') {
+          setBaseUrl('');
+          setModelName('gemini-2.5-flash');
+          setProxyUrl('');
+      } else if (aiProvider === 'doubao') {
+          setBaseUrl('https://ark.cn-beijing.volces.com/api/v3');
+          setModelName('ep-20250212093506-69677'); 
+          setProxyUrl('https://corsproxy.io/?'); 
+      } else if (aiProvider === 'deepseek') {
+          setBaseUrl('https://api.deepseek.com');
+          setModelName('deepseek-chat');
+          setProxyUrl('https://corsproxy.io/?');
+      } else if (aiProvider === 'kimi') {
+          setBaseUrl('https://api.moonshot.cn/v1');
+          setModelName('moonshot-v1-8k');
+          setProxyUrl('https://corsproxy.io/?');
+      } else if (aiProvider === 'openai') {
+          setBaseUrl('https://api.openai.com/v1');
+          setModelName('gpt-4o');
+          setProxyUrl('https://corsproxy.io/?');
+      } else {
+          setBaseUrl('');
+          setModelName('');
+          setProxyUrl('');
+      }
+  }, [aiProvider]);
+
   const handleFileSelect = (files: File[]) => {
     const newItems: BatchItem[] = files.map(file => ({
         id: Math.random().toString(36).substring(7),
@@ -33,89 +73,99 @@ const App: React.FC = () => {
     setIsQueueProcessing(true);
   };
 
-  // Effect to process queue sequentially
-  useEffect(() => {
-    const processNext = async () => {
-        if (!isQueueProcessing) return;
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setInstructorImage(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
-        // Find next queued item
-        const nextItemIndex = batchItems.findIndex(i => i.status === 'queued');
-        
-        if (nextItemIndex === -1) {
-            setIsQueueProcessing(false);
-            return;
-        }
-
-        const currentItem = batchItems[nextItemIndex];
-
-        // Update status to processing
-        setBatchItems(prev => {
-            const copy = [...prev];
-            copy[nextItemIndex] = { ...copy[nextItemIndex], status: 'processing' };
-            return copy;
-        });
-
+  // Helper to process a single item
+  const processItem = async (item: BatchItem, currentConfig: any) => {
         try {
             // 1. Extract Text
-            const textContent = await extractTextFromFile(currentItem.file);
+            const textContent = await extractTextFromFile(item.file);
             
             if (!textContent || textContent.trim().length < 50) {
-                throw new Error("Empty or unreadable document.");
+                throw new Error("Document is empty or contains no readable text.");
             }
 
             // 2. Prepare AI Config
             const aiConfig: AIConfig = {
-                provider: aiProvider,
-                doubaoEndpointId: doubaoEndpoint,
-                proxyUrl: proxyUrl.trim()
+                provider: currentConfig.aiProvider,
+                apiKey: currentConfig.apiKey.trim(),
+                baseUrl: currentConfig.baseUrl.trim(),
+                modelName: currentConfig.modelName.trim(),
+                proxyUrl: currentConfig.proxyUrl.trim()
             };
-
-            // 3. Grade
-            const result = await gradeDocument(textContent, { minScore, maxScore, aiConfig });
             
-            // 4. THROTTLE
-            await new Promise(resolve => setTimeout(resolve, 5000));
-
-            // Update success
-            setBatchItems(prev => {
-                const copy = [...prev];
-                copy[nextItemIndex] = { 
-                    ...copy[nextItemIndex], 
-                    status: 'completed', 
-                    result: result 
-                };
-                return copy;
+            // 3. Grade
+            const result = await gradeDocument(textContent, { 
+                minScore: currentConfig.minScore, 
+                maxScore: currentConfig.maxScore, 
+                aiConfig 
             });
+            
+            // Update success
+            setBatchItems(prev => prev.map(i => 
+                i.id === item.id ? { ...i, status: 'completed', result } : i
+            ));
 
         } catch (err: any) {
-            console.error("Error processing file", currentItem.file.name, err);
+            console.error("Error processing file", item.file.name, err);
             
-            const isRateLimit = err.status === 429 || (err.message && err.message.includes('429'));
+            let errorMessage = "Unknown Error";
+            if (typeof err === 'string') errorMessage = err;
+            else if (err instanceof Error) errorMessage = err.message;
+            else if (err && typeof err === 'object' && err.message) errorMessage = String(err.message);
             
-            if (isRateLimit) {
-                console.warn("CRITICAL RATE LIMIT: Pausing queue for 60 seconds...");
-                await new Promise(resolve => setTimeout(resolve, 60000));
-            } else {
-                await new Promise(resolve => setTimeout(resolve, 2000));
-            }
-            
-            // Update error
-            setBatchItems(prev => {
-                const copy = [...prev];
-                copy[nextItemIndex] = { 
-                    ...copy[nextItemIndex], 
-                    status: 'error', 
-                    error: (err as Error).message 
-                };
-                return copy;
-            });
+            // Update error state
+            setBatchItems(prev => prev.map(i => 
+                i.id === item.id ? { ...i, status: 'error', error: errorMessage } : i
+            ));
         }
-    };
+  };
 
-    if (isQueueProcessing) {
-        processNext();
+  // Concurrent Queue Processing Effect
+  useEffect(() => {
+    if (!isQueueProcessing) return;
+
+    const queuedItems = batchItems.filter(i => i.status === 'queued');
+    const processingItems = batchItems.filter(i => i.status === 'processing');
+    
+    // Check if we are done
+    if (queuedItems.length === 0 && processingItems.length === 0) {
+        setIsQueueProcessing(false);
+        return;
     }
-  }, [batchItems, isQueueProcessing, minScore, maxScore, aiProvider, doubaoEndpoint, proxyUrl]);
+
+    // Calculate slots
+    const slotsAvailable = CONCURRENT_LIMIT - processingItems.length;
+
+    if (slotsAvailable > 0 && queuedItems.length > 0) {
+        const toProcess = queuedItems.slice(0, slotsAvailable);
+
+        // 1. Mark as processing synchronously to block other effects from picking them up
+        setBatchItems(prev => prev.map(i => 
+            toProcess.find(t => t.id === i.id) ? { ...i, status: 'processing', error: undefined } : i
+        ));
+
+        // 2. Launch async tasks
+        // We pass the current config values to the function
+        const configSnapshot = {
+            aiProvider, apiKey, baseUrl, modelName, proxyUrl, minScore, maxScore
+        };
+
+        toProcess.forEach(item => {
+            processItem(item, configSnapshot);
+        });
+    }
+
+  }, [batchItems, isQueueProcessing, aiProvider, apiKey, baseUrl, modelName, proxyUrl, minScore, maxScore]);
 
 
   const handleReset = () => {
@@ -123,6 +173,22 @@ const App: React.FC = () => {
     setSelectedItemId(null);
     setIsQueueProcessing(false);
   };
+
+  const handleRetry = (id: string) => {
+    setBatchItems(prev => prev.map(item => {
+        if (item.id === id) {
+            return { ...item, status: 'queued', error: undefined, result: undefined };
+        }
+        return item;
+    }));
+    setIsQueueProcessing(true);
+  };
+
+  const getInstructorSettings = (): InstructorSettings => ({
+      mode: instructorMode,
+      name: instructorName,
+      imageData: instructorImage
+  });
 
   const selectedItem = batchItems.find(i => i.id === selectedItemId);
 
@@ -142,7 +208,7 @@ const App: React.FC = () => {
           </div>
           <div className="text-sm font-medium text-slate-500 hidden sm:flex items-center gap-2">
              <Bot className="w-4 h-4" />
-             Running on: <span className="text-primary font-bold uppercase">{aiProvider}</span>
+             AI Model: <span className="text-primary font-bold uppercase">{aiProvider}</span>
           </div>
         </div>
       </nav>
@@ -158,7 +224,7 @@ const App: React.FC = () => {
                     <span className="text-primary">Every Assignment</span>
                 </h1>
                 <p className="text-lg text-slate-600 max-w-2xl mx-auto">
-                    Upload Word, Excel, or PDF documents. We use AI to score, critique, and annotate your student's work automatically.
+                    Upload documents to grade automatically. Configure grading and signature options below.
                 </p>
             </div>
         )}
@@ -173,8 +239,8 @@ const App: React.FC = () => {
                         Grading Configuration
                     </h3>
                     
+                    {/* Top Row: Score & Provider */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-                        {/* Score Range */}
                         <div>
                             <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
                                 Score Range
@@ -198,52 +264,159 @@ const App: React.FC = () => {
                             </div>
                         </div>
 
-                        {/* AI Provider */}
                         <div>
                              <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
-                                AI Model
+                                AI Provider
                             </label>
                             <select 
                                 value={aiProvider}
                                 onChange={(e) => setAiProvider(e.target.value as AIProvider)}
-                                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white"
+                                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white font-medium text-slate-700"
                             >
-                                <option value="gemini">Google Gemini 2.5 Flash (Recommended)</option>
+                                <option value="gemini">Google Gemini (Free/Built-in)</option>
                                 <option value="doubao">Volcengine Doubao (Pro)</option>
+                                <option value="deepseek">DeepSeek-V3</option>
+                                <option value="kimi">Moonshot Kimi</option>
+                                <option value="openai">ChatGPT-4o</option>
+                                <option value="custom">Custom OpenAI API</option>
                             </select>
                         </div>
                     </div>
 
-                    {/* Doubao Specific Settings */}
-                    {aiProvider === 'doubao' && (
-                        <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 space-y-4 animate-fadeIn">
+                    {/* Instructor / Signature Settings */}
+                    <div className="bg-slate-50 p-5 rounded-lg border border-slate-200 mb-6 animate-fadeIn">
+                        <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2 border-b border-slate-200 pb-2 mb-3">
+                            <PenTool className="w-4 h-4" />
+                            Instructor Signature
+                        </h4>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            <div>
+                                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+                                    Signature Mode
+                                </label>
+                                <div className="flex gap-2 bg-white rounded-lg p-1 border border-slate-200">
+                                    <button
+                                        onClick={() => setInstructorMode('text')}
+                                        className={`flex-1 flex items-center justify-center gap-1 py-1.5 px-2 text-xs font-medium rounded transition-all ${
+                                            instructorMode === 'text' ? 'bg-primary text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'
+                                        }`}
+                                    >
+                                        <Type className="w-3 h-3" /> Text
+                                    </button>
+                                    <button
+                                        onClick={() => setInstructorMode('image')}
+                                        className={`flex-1 flex items-center justify-center gap-1 py-1.5 px-2 text-xs font-medium rounded transition-all ${
+                                            instructorMode === 'image' ? 'bg-primary text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'
+                                        }`}
+                                    >
+                                        <ImageIcon className="w-3 h-3" /> Image
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="md:col-span-2">
+                                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+                                    {instructorMode === 'text' ? 'Instructor Name' : 'Upload Signature Image'}
+                                </label>
+                                {instructorMode === 'text' ? (
+                                    <input 
+                                        type="text" 
+                                        value={instructorName}
+                                        onChange={(e) => setInstructorName(e.target.value)}
+                                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
+                                        placeholder="e.g. Professor Smith"
+                                    />
+                                ) : (
+                                    <div className="flex items-center gap-4">
+                                        <input 
+                                            type="file" 
+                                            accept="image/*"
+                                            onChange={handleImageUpload}
+                                            className="block w-full text-sm text-slate-500
+                                                file:mr-4 file:py-2 file:px-4
+                                                file:rounded-full file:border-0
+                                                file:text-xs file:font-semibold
+                                                file:bg-indigo-50 file:text-indigo-700
+                                                hover:file:bg-indigo-100"
+                                        />
+                                        {instructorImage && (
+                                            <div className="h-10 w-10 relative shrink-0">
+                                                <img src={instructorImage} alt="Signature Preview" className="h-full w-full object-contain rounded border border-slate-200 bg-white" />
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Dynamic AI Settings */}
+                    {aiProvider !== 'gemini' && (
+                        <div className="bg-slate-50 p-5 rounded-lg border border-slate-200 space-y-4 animate-fadeIn">
+                            <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2 border-b border-slate-200 pb-2">
+                                <Cpu className="w-4 h-4" />
+                                {aiProvider.charAt(0).toUpperCase() + aiProvider.slice(1)} Settings
+                            </h4>
+                            
+                            {/* API Key Input (Always Visible) */}
                             <div>
                                 <label className="block text-xs font-semibold text-slate-500 mb-1 flex items-center gap-1">
-                                    <Key className="w-3 h-3" /> Endpoint ID
+                                    <Key className="w-3 h-3" /> API Key <span className="text-red-400">*</span>
                                 </label>
                                 <input 
-                                    type="text" 
-                                    value={doubaoEndpoint}
-                                    onChange={(e) => setDoubaoEndpoint(e.target.value)}
+                                    type="password" 
+                                    value={apiKey}
+                                    onChange={(e) => setApiKey(e.target.value)}
                                     className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono"
-                                    placeholder="ep-202xxxxxxxx-xxxxx"
+                                    placeholder={`Enter your ${aiProvider} API Key`}
                                 />
                             </div>
-                            <div>
-                                <label className="block text-xs font-semibold text-slate-500 mb-1 flex items-center gap-1">
-                                    <Network className="w-3 h-3" /> CORS Proxy URL (Required for Browser)
-                                </label>
-                                <input 
-                                    type="text" 
-                                    value={proxyUrl}
-                                    onChange={(e) => setProxyUrl(e.target.value)}
-                                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono"
-                                    placeholder="https://cors-anywhere.herokuapp.com/"
-                                />
-                                <p className="text-xs text-slate-400 mt-1">
-                                    Doubao API does not support direct browser calls. Use a proxy service or localhost proxy.
-                                </p>
-                            </div>
+
+                            {/* HIDDEN / AUTO-CONFIGURED FIELDS */}
+                            {(aiProvider === 'custom' || aiProvider === 'doubao') && (
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-500 mb-1 flex items-center gap-1">
+                                        <Bot className="w-3 h-3" /> {aiProvider === 'doubao' ? 'Endpoint ID (Model)' : 'Model Name'}
+                                    </label>
+                                    <input 
+                                        type="text" 
+                                        value={modelName}
+                                        onChange={(e) => setModelName(e.target.value)}
+                                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono"
+                                        placeholder={aiProvider === 'doubao' ? "ep-2025..." : "gpt-4o"}
+                                    />
+                                    {aiProvider === 'doubao' && <p className="text-xs text-slate-400 mt-1">Check your Volcengine console for the Endpoint ID (e.g., ep-2025...)</p>}
+                                </div>
+                            )}
+
+                            {aiProvider === 'custom' && (
+                                <>
+                                    <div>
+                                        <label className="block text-xs font-semibold text-slate-500 mb-1 flex items-center gap-1">
+                                            <Server className="w-3 h-3" /> Base URL
+                                        </label>
+                                        <input 
+                                            type="text" 
+                                            value={baseUrl}
+                                            onChange={(e) => setBaseUrl(e.target.value)}
+                                            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono"
+                                            placeholder="https://api.example.com/v1"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-semibold text-slate-500 mb-1 flex items-center gap-1">
+                                            <Network className="w-3 h-3" /> CORS Proxy
+                                        </label>
+                                        <input 
+                                            type="text" 
+                                            value={proxyUrl}
+                                            onChange={(e) => setProxyUrl(e.target.value)}
+                                            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono"
+                                            placeholder="Optional: https://corsproxy.io/?"
+                                        />
+                                    </div>
+                                </>
+                            )}
                         </div>
                     )}
                 </div>
@@ -256,8 +429,10 @@ const App: React.FC = () => {
         {batchItems.length > 0 && !selectedItem && (
             <BatchDashboard 
                 items={batchItems}
+                instructorSettings={getInstructorSettings()}
                 onViewDetails={setSelectedItemId}
                 onReset={handleReset}
+                onRetry={handleRetry}
             />
         )}
 
@@ -267,6 +442,7 @@ const App: React.FC = () => {
                 result={selectedItem.result} 
                 originalFileName={selectedItem.file.name}
                 file={selectedItem.file}
+                instructorSettings={getInstructorSettings()}
                 onReset={handleReset}
                 onBack={() => setSelectedItemId(null)}
             />

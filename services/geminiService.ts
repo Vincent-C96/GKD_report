@@ -1,27 +1,47 @@
-import { GoogleGenAI, Schema, Type } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 import { GradingResult, GradeOptions } from "../types";
 
 // ==================================================================================
-// SYSTEM PROMPTS
+// SYSTEM PROMPTS & PERSONAS
 // ==================================================================================
 
-const getSystemPrompt = (min: number, max: number) => `
+// Helper to generate a random grading persona to ensure score variance (Normal Distribution simulation)
+const getRandomPersona = () => {
+    const r = Math.random();
+    // 20% Strict (Pulls scores down)
+    // 60% Standard/Balanced (Average)
+    // 20% Detailed/Nuanced (Adds variance)
+    
+    if (r < 0.20) {
+        return "MODE: STRICT GRADER. You are a very critical professor. Scrutinize every error. Do not give high scores easily. Scores >90 should be extremely rare and reserved for perfection.";
+    } else if (r > 0.80) {
+        return "MODE: NUANCED GRADER. Focus heavily on originality and depth. If the work is generic, grade it strictly average. Do not inflate scores.";
+    } else {
+        return "MODE: STANDARD GRADER. Evaluate fairly but realistically. Assume a normal distribution of student abilities. Most scores should fall in the middle range, not at the top.";
+    }
+};
+
+const getSystemPrompt = (min: number, max: number, personaInstruction: string) => `
   You are an expert academic teacher and professional editor. 
   Your goal is to grade assignments and provide structured JSON output.
+  
+  GRADING INSTRUCTIONS:
+  ${personaInstruction}
+  CRITICAL: Do not output multiple scores that are identical if possible. Use the full precision of the range ${min} to ${max}.
   
   Output JSON Schema:
   {
     "score": "integer, strictly between ${min} and ${max}",
     "letter_grade": "string, e.g. A, B, C",
-    "summary": "string, 2-3 sentence executive summary",
-    "teacher_comment": "string, a professional paragraph (~50 words) addressing the student directly, suitable for the 'Teacher Comments' box.",
+    "summary": "string, 2-3 sentence executive summary in Simplified Chinese (简体中文)",
+    "teacher_comment": "string, a professional paragraph (~50 words) addressing the student directly in Simplified Chinese (简体中文). This is strictly required as it will be printed on the student's paper.",
     "feedback": [
       {
         "original_text": "string, exact quote from document",
-        "comment": "string, critique or praise",
+        "comment": "string, critique or praise in Simplified Chinese (简体中文)",
         "sentiment": "string, 'positive', 'negative', or 'neutral'",
         "score_impact": "integer, e.g. -2, +5, 0",
-        "suggestion": "string, optional improvement suggestion"
+        "suggestion": "string, optional improvement suggestion in Simplified Chinese (简体中文)"
       }
     ]
   }
@@ -65,24 +85,28 @@ export const gradeDocument = async (textContext: string, options: GradeOptions):
   // Truncate text to avoid token limits (approx 30k chars)
   const truncatedText = textContext.slice(0, 30000);
 
+  // Generate a unique persona for this specific document grading session
+  const persona = getRandomPersona();
+
   if (provider === 'gemini') {
-      return gradeWithGemini(truncatedText, options);
+      return gradeWithGemini(truncatedText, options, persona);
   } else {
-      return gradeWithDoubao(truncatedText, options);
+      // All other providers (Doubao, DeepSeek, Kimi, OpenAI) use the universal adapter
+      return gradeWithUniversalAPI(truncatedText, options, persona);
   }
 };
 
 // ==================================================================================
-// GEMINI ENGINE
+// GEMINI ENGINE (Google SDK)
 // ==================================================================================
 
-const gradeWithGemini = async (text: string, options: GradeOptions): Promise<GradingResult> => {
-  if (!process.env.API_KEY) throw new Error("API Key missing");
+const gradeWithGemini = async (text: string, options: GradeOptions, persona: string): Promise<GradingResult> => {
+  if (!process.env.API_KEY) throw new Error("Internal API Key missing for Gemini");
 
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const { minScore, maxScore } = options;
 
-  const MAX_RETRIES = 3;
+  const MAX_RETRIES = 10; 
   let attempt = 0;
 
   while (attempt < MAX_RETRIES) {
@@ -91,9 +115,9 @@ const gradeWithGemini = async (text: string, options: GradeOptions): Promise<Gra
             model: 'gemini-2.5-flash',
             contents: getUserPrompt(text, minScore, maxScore),
             config: {
-                systemInstruction: getSystemPrompt(minScore, maxScore),
+                systemInstruction: getSystemPrompt(minScore, maxScore, persona),
+                temperature: 0.8, // Increased for variance
                 responseMimeType: "application/json",
-                // Defining schema helps Gemini return strictly structured data
                 responseSchema: {
                     type: Type.OBJECT,
                     properties: {
@@ -126,40 +150,46 @@ const gradeWithGemini = async (text: string, options: GradeOptions): Promise<Gra
 
     } catch (error: any) {
         attempt++;
-        // Handle 429
         if (error.message && error.message.includes('429')) {
-             const delayTime = Math.pow(2, attempt) * 2000;
-             console.warn(`Gemini 429. Retrying in ${delayTime}ms...`);
+             const backoff = Math.pow(2, attempt) * 5000;
+             const delayTime = Math.min(backoff, 60000);
+             console.warn(`Gemini 429 (Attempt ${attempt}/${MAX_RETRIES}). Waiting ${delayTime/1000}s...`);
              await sleep(delayTime);
-             if (attempt === MAX_RETRIES) throw error;
+             if (attempt === MAX_RETRIES) throw new Error(`Gemini overload: ${error.message}`);
              continue;
         }
-        throw error;
+        if (error.message && (error.message.includes('500') || error.message.includes('503'))) {
+             await sleep(3000);
+             continue;
+        }
+        throw new Error(error.message || "Unknown Gemini Error");
     }
   }
   throw new Error("Gemini failed after retries");
 };
 
 // ==================================================================================
-// DOUBAO (VOLCENGINE) ENGINE
+// UNIVERSAL API ENGINE (OpenAI Compatible)
 // ==================================================================================
 
-const gradeWithDoubao = async (text: string, options: GradeOptions): Promise<GradingResult> => {
-  const { doubaoEndpointId, proxyUrl } = options.aiConfig;
+const gradeWithUniversalAPI = async (text: string, options: GradeOptions, persona: string): Promise<GradingResult> => {
+  const { baseUrl, apiKey, modelName, proxyUrl, provider } = options.aiConfig;
   const { minScore, maxScore } = options;
 
-  if (!doubaoEndpointId) throw new Error("Doubao Endpoint ID is missing.");
-  
-  // Use Gemini Key as fallback or assume user has set DOUBAO_API_KEY in env
-  // Since we can't ask for UI input for key, we assume process.env.API_KEY is usable
-  // or checks for a specific Doubao key.
-  const apiKey = process.env.DOUBAO_API_KEY || process.env.API_KEY;
-  if (!apiKey) throw new Error("API Key is missing.");
+  if (!baseUrl) throw new Error(`${provider} Base URL is missing.`);
+  if (!apiKey) throw new Error(`${provider} API Key is missing.`);
+  if (!modelName) throw new Error(`${provider} Model Name is missing.`);
 
-  const targetUrl = "https://ark.cn-beijing.volces.com/api/v3/chat/completions";
-  // If proxy is set, prepend it. 
-  // E.g. proxy = "https://cors-anywhere.herokuapp.com/"
-  const finalUrl = proxyUrl ? `${proxyUrl.replace(/\/$/, '')}/${targetUrl}` : targetUrl;
+  let targetUrl = baseUrl.endsWith('/') ? `${baseUrl}chat/completions` : `${baseUrl}/chat/completions`;
+  let finalUrl = targetUrl;
+  if (proxyUrl) {
+      const cleanProxy = proxyUrl.trim();
+      if (cleanProxy.endsWith('?')) {
+          finalUrl = `${cleanProxy}${targetUrl}`;
+      } else {
+          finalUrl = `${cleanProxy.replace(/\/$/, '')}/${targetUrl}`;
+      }
+  }
 
   const MAX_RETRIES = 5;
   let attempt = 0;
@@ -170,54 +200,61 @@ const gradeWithDoubao = async (text: string, options: GradeOptions): Promise<Gra
           method: 'POST',
           headers: {
               'Content-Type': 'application/json',
-              'Authorization': `Bearer ${apiKey}`,
-              // Add generic headers that might help with some proxies
-              'X-Requested-With': 'XMLHttpRequest'
+              'Authorization': `Bearer ${apiKey}`
           },
           body: JSON.stringify({
-              model: doubaoEndpointId,
+              model: modelName,
               messages: [
-                  { role: "system", content: getSystemPrompt(minScore, maxScore) },
+                  { role: "system", content: getSystemPrompt(minScore, maxScore, persona) },
                   { role: "user", content: getUserPrompt(text, minScore, maxScore) }
               ],
-              temperature: 0.2,
-              stream: false
+              temperature: 0.8, // Increased for variance
+              stream: false,
+              response_format: { type: "json_object" } 
           })
       });
 
       if (!response.ok) {
           const txt = await response.text();
-          throw { status: response.status, message: txt || response.statusText };
+          let errorMessage = `${provider} API Error ${response.status}: ${response.statusText}`;
+          try {
+              const jsonErr = JSON.parse(txt);
+              if (jsonErr.error && jsonErr.error.message) {
+                  errorMessage = `${provider} Error: ${jsonErr.error.message}`;
+              }
+          } catch(e) {}
+          throw new Error(errorMessage);
       }
 
       const data = await response.json();
       const content = data.choices?.[0]?.message?.content;
-      if (!content) throw new Error("No content from Doubao");
+      if (!content) throw new Error(`No content received from ${provider}`);
 
       const parsed = extractJson(content);
-      if (!parsed) throw new Error("Failed to parse Doubao JSON");
+      if (!parsed) throw new Error(`Failed to parse valid JSON from ${provider} response`);
 
       return parsed as GradingResult;
 
     } catch (error: any) {
       attempt++;
-      const status = error.status || 0;
+      const msg = error.message || '';
       
-      // Retry on Rate Limit (429) or Server Error (5xx) or Network Error (fetch fail)
-      if (attempt < MAX_RETRIES) {
-          const delayTime = Math.pow(2, attempt) * 3000;
-          console.warn(`Doubao Attempt ${attempt} failed (${status}). Retrying...`);
+      if (msg.includes('429')) {
+          const delayTime = Math.pow(2, attempt) * 5000;
           await sleep(delayTime);
           continue;
       }
-      
-      if (error.name === 'TypeError' && error.message === 'Failed to fetch') {
-         throw new Error("Network Error (CORS). Please try adding a Proxy URL in settings.");
+      if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
+          throw new Error("Network Error (CORS). Use Proxy option.");
       }
       
-      throw error;
+      if (attempt < MAX_RETRIES) {
+          await sleep(2000);
+          continue;
+      }
+      throw new Error(msg || `${provider} failed unknown error`);
     }
   }
 
-  throw new Error("Doubao failed after retries");
+  throw new Error(`${provider} failed after retries`);
 };

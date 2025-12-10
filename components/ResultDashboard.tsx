@@ -1,5 +1,5 @@
 import React from 'react';
-import { GradingResult, FeedbackItem } from '../types';
+import { GradingResult, FeedbackItem, InstructorSettings } from '../types';
 import { annotateAndDownloadFile } from '../services/fileService';
 import { 
   CheckCircle, 
@@ -16,8 +16,8 @@ interface ResultDashboardProps {
   originalFileName: string;
   onReset: () => void;
   onBack?: () => void; // Optional back handler for batch mode
-  // We need the original file object to modify it
-  file: File; 
+  file: File;
+  instructorSettings: InstructorSettings;
 }
 
 const ScoreRing: React.FC<{ score: number, letter: string }> = ({ score, letter }) => {
@@ -62,11 +62,11 @@ const ScoreRing: React.FC<{ score: number, letter: string }> = ({ score, letter 
   );
 };
 
-const ResultDashboard: React.FC<ResultDashboardProps> = ({ result, originalFileName, onReset, onBack, file }) => {
+const ResultDashboard: React.FC<ResultDashboardProps> = ({ result, originalFileName, onReset, onBack, file, instructorSettings }) => {
   
   const handleDownload = async () => {
-    // Pass the actual file to be annotated
-    await annotateAndDownloadFile(file, result);
+    // Pass the actual file to be annotated and the instructor settings
+    await annotateAndDownloadFile(file, result, instructorSettings);
   };
 
   return (
@@ -101,7 +101,7 @@ const ResultDashboard: React.FC<ResultDashboardProps> = ({ result, originalFileN
                 Download Graded File
             </button>
             <p className="text-xs text-center text-slate-400">
-                Adds comments to original file
+                Adds comments {instructorSettings.mode === 'image' && instructorSettings.imageData ? '& signature' : ''} to file
             </p>
             {!onBack && (
                 <button 
@@ -124,6 +124,14 @@ const ResultDashboard: React.FC<ResultDashboardProps> = ({ result, originalFileN
           <p className="text-indigo-800 italic">
             "{result.teacher_comment}"
           </p>
+          <div className="mt-4 flex items-center justify-end gap-2 text-indigo-700/60 text-sm">
+             <span>Instructor:</span>
+             {instructorSettings.mode === 'image' && instructorSettings.imageData ? (
+                 <img src={instructorSettings.imageData} alt="Sig" className="h-8 border border-indigo-200 rounded bg-white" />
+             ) : (
+                 <span className="font-serif font-bold italic">{instructorSettings.name}</span>
+             )}
+          </div>
       </div>
 
       {/* Detailed Breakdown */}
