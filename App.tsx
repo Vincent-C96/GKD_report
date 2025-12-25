@@ -48,7 +48,7 @@ const App: React.FC = () => {
       } else if (aiProvider === 'deepseek') {
           setBaseUrl('https://api.deepseek.com');
           setModelName('deepseek-chat');
-          setProxyUrl('https://corsproxy.io/?');
+          setProxyUrl('');
       } else if (aiProvider === 'kimi') {
           setBaseUrl('https://api.moonshot.cn/v1');
           setModelName('moonshot-v1-8k');
