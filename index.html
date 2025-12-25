@@ -6,6 +6,9 @@
     <title>AI Smart Grader</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Load Artistic Fonts: Ma Shan Zheng (Chinese) and Dancing Script (English) -->
+    <link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@700&family=Ma+Shan+Zheng&display=swap" rel="stylesheet">
+    
     <!-- Load parsing libraries globally for browser usage -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
@@ -21,6 +24,7 @@
           extend: {
             fontFamily: {
               sans: ['Inter', 'sans-serif'],
+              artistic: ['"Ma Shan Zheng"', '"Dancing Script"', 'cursive'],
             },
             colors: {
               primary: '#4F46E5', // Indigo 600
@@ -47,6 +51,5 @@
 </head>
   <body class="bg-slate-50 text-slate-900">
     <div id="root"></div>
-    <script type="module" src="/index.tsx"></script>
   </body>
 </html>

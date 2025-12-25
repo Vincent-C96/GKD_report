@@ -5,7 +5,7 @@ import ResultDashboard from './components/ResultDashboard';
 import BatchDashboard from './components/BatchDashboard';
 import { extractTextFromFile } from './services/fileService';
 import { gradeDocument } from './services/geminiService';
-import { GraduationCap, Settings, Bot, Network, Key, Server, Cpu, PenTool, Image as ImageIcon, Type } from 'lucide-react';
+import { GraduationCap, Settings, Bot, Network, Key, Server, Cpu, PenTool, Image as ImageIcon, Type, Feather } from 'lucide-react';
 
 // Number of files to process simultaneously
 const CONCURRENT_LIMIT = 3;
@@ -20,8 +20,10 @@ const App: React.FC = () => {
   const [maxScore, setMaxScore] = useState<number>(100);
 
   // Instructor Settings
+  const [instructorEnabled, setInstructorEnabled] = useState<boolean>(false);
   const [instructorMode, setInstructorMode] = useState<'text' | 'image'>('text');
   const [instructorName, setInstructorName] = useState<string>('AI Grader');
+  const [instructorFont, setInstructorFont] = useState<'standard' | 'artistic'>('standard');
   const [instructorImage, setInstructorImage] = useState<string>('');
 
   // AI Settings State
@@ -185,8 +187,10 @@ const App: React.FC = () => {
   };
 
   const getInstructorSettings = (): InstructorSettings => ({
+      enabled: instructorEnabled,
       mode: instructorMode,
       name: instructorName,
+      fontStyle: instructorFont,
       imageData: instructorImage
   });
 
@@ -285,69 +289,105 @@ const App: React.FC = () => {
 
                     {/* Instructor / Signature Settings */}
                     <div className="bg-slate-50 p-5 rounded-lg border border-slate-200 mb-6 animate-fadeIn">
-                        <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2 border-b border-slate-200 pb-2 mb-3">
-                            <PenTool className="w-4 h-4" />
-                            Instructor Signature
-                        </h4>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                            <div>
-                                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
-                                    Signature Mode
-                                </label>
-                                <div className="flex gap-2 bg-white rounded-lg p-1 border border-slate-200">
-                                    <button
-                                        onClick={() => setInstructorMode('text')}
-                                        className={`flex-1 flex items-center justify-center gap-1 py-1.5 px-2 text-xs font-medium rounded transition-all ${
-                                            instructorMode === 'text' ? 'bg-primary text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'
-                                        }`}
-                                    >
-                                        <Type className="w-3 h-3" /> Text
-                                    </button>
-                                    <button
-                                        onClick={() => setInstructorMode('image')}
-                                        className={`flex-1 flex items-center justify-center gap-1 py-1.5 px-2 text-xs font-medium rounded transition-all ${
-                                            instructorMode === 'image' ? 'bg-primary text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'
-                                        }`}
-                                    >
-                                        <ImageIcon className="w-3 h-3" /> Image
-                                    </button>
+                        <div className="flex items-center justify-between border-b border-slate-200 pb-2 mb-3">
+                            <h4 className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                                <PenTool className="w-4 h-4" />
+                                Instructor Signature
+                            </h4>
+                            <label className="relative inline-flex items-center cursor-pointer">
+                                <input 
+                                    type="checkbox" 
+                                    checked={instructorEnabled} 
+                                    onChange={(e) => setInstructorEnabled(e.target.checked)} 
+                                    className="sr-only peer" 
+                                />
+                                <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
+                                <span className="ml-2 text-xs font-medium text-slate-600">
+                                    {instructorEnabled ? 'On' : 'Off'}
+                                </span>
+                            </label>
+                        </div>
+
+                        {instructorEnabled && (
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-fadeIn">
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+                                        Signature Mode
+                                    </label>
+                                    <div className="flex gap-2 bg-white rounded-lg p-1 border border-slate-200">
+                                        <button
+                                            onClick={() => setInstructorMode('text')}
+                                            className={`flex-1 flex items-center justify-center gap-1 py-1.5 px-2 text-xs font-medium rounded transition-all ${
+                                                instructorMode === 'text' ? 'bg-primary text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'
+                                            }`}
+                                        >
+                                            <Type className="w-3 h-3" /> Text
+                                        </button>
+                                        <button
+                                            onClick={() => setInstructorMode('image')}
+                                            className={`flex-1 flex items-center justify-center gap-1 py-1.5 px-2 text-xs font-medium rounded transition-all ${
+                                                instructorMode === 'image' ? 'bg-primary text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'
+                                            }`}
+                                        >
+                                            <ImageIcon className="w-3 h-3" /> Image
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="md:col-span-2">
+                                    <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+                                        {instructorMode === 'text' ? 'Instructor Name' : 'Upload Signature Image'}
+                                    </label>
+                                    {instructorMode === 'text' ? (
+                                        <div className="flex gap-2">
+                                            <input 
+                                                type="text" 
+                                                value={instructorName}
+                                                onChange={(e) => setInstructorName(e.target.value)}
+                                                className={`flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm transition-all ${instructorFont === 'artistic' ? 'font-artistic text-xl' : ''}`}
+                                                placeholder="e.g. Professor Smith"
+                                            />
+                                            {/* Font Style Toggle */}
+                                            <div className="flex bg-white rounded-lg border border-slate-200 p-1">
+                                                <button 
+                                                    onClick={() => setInstructorFont('standard')}
+                                                    className={`p-2 rounded hover:bg-slate-50 ${instructorFont === 'standard' ? 'bg-slate-100 text-primary' : 'text-slate-400'}`}
+                                                    title="Standard Font"
+                                                >
+                                                    <Type className="w-4 h-4" />
+                                                </button>
+                                                <button 
+                                                    onClick={() => setInstructorFont('artistic')}
+                                                    className={`p-2 rounded hover:bg-slate-50 ${instructorFont === 'artistic' ? 'bg-slate-100 text-primary' : 'text-slate-400'}`}
+                                                    title="Artistic/Handwriting Font"
+                                                >
+                                                    <Feather className="w-4 h-4" />
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="flex items-center gap-4">
+                                            <input 
+                                                type="file" 
+                                                accept="image/*"
+                                                onChange={handleImageUpload}
+                                                className="block w-full text-sm text-slate-500
+                                                    file:mr-4 file:py-2 file:px-4
+                                                    file:rounded-full file:border-0
+                                                    file:text-xs file:font-semibold
+                                                    file:bg-indigo-50 file:text-indigo-700
+                                                    hover:file:bg-indigo-100"
+                                            />
+                                            {instructorImage && (
+                                                <div className="h-10 w-10 relative shrink-0">
+                                                    <img src={instructorImage} alt="Signature Preview" className="h-full w-full object-contain rounded border border-slate-200 bg-white" />
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                             </div>
-
-                            <div className="md:col-span-2">
-                                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
-                                    {instructorMode === 'text' ? 'Instructor Name' : 'Upload Signature Image'}
-                                </label>
-                                {instructorMode === 'text' ? (
-                                    <input 
-                                        type="text" 
-                                        value={instructorName}
-                                        onChange={(e) => setInstructorName(e.target.value)}
-                                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
-                                        placeholder="e.g. Professor Smith"
-                                    />
-                                ) : (
-                                    <div className="flex items-center gap-4">
-                                        <input 
-                                            type="file" 
-                                            accept="image/*"
-                                            onChange={handleImageUpload}
-                                            className="block w-full text-sm text-slate-500
-                                                file:mr-4 file:py-2 file:px-4
-                                                file:rounded-full file:border-0
-                                                file:text-xs file:font-semibold
-                                                file:bg-indigo-50 file:text-indigo-700
-                                                hover:file:bg-indigo-100"
-                                        />
-                                        {instructorImage && (
-                                            <div className="h-10 w-10 relative shrink-0">
-                                                <img src={instructorImage} alt="Signature Preview" className="h-full w-full object-contain rounded border border-slate-200 bg-white" />
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
-                            </div>
-                        </div>
+                        )}
                     </div>
 
                     {/* Dynamic AI Settings */}

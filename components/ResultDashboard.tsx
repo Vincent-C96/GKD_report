@@ -101,7 +101,7 @@ const ResultDashboard: React.FC<ResultDashboardProps> = ({ result, originalFileN
                 Download Graded File
             </button>
             <p className="text-xs text-center text-slate-400">
-                Adds comments {instructorSettings.mode === 'image' && instructorSettings.imageData ? '& signature' : ''} to file
+                Adds comments {instructorSettings.enabled ? '& signature' : ''} to file
             </p>
             {!onBack && (
                 <button 
@@ -124,14 +124,18 @@ const ResultDashboard: React.FC<ResultDashboardProps> = ({ result, originalFileN
           <p className="text-indigo-800 italic">
             "{result.teacher_comment}"
           </p>
-          <div className="mt-4 flex items-center justify-end gap-2 text-indigo-700/60 text-sm">
-             <span>Instructor:</span>
-             {instructorSettings.mode === 'image' && instructorSettings.imageData ? (
-                 <img src={instructorSettings.imageData} alt="Sig" className="h-8 border border-indigo-200 rounded bg-white" />
-             ) : (
-                 <span className="font-serif font-bold italic">{instructorSettings.name}</span>
-             )}
-          </div>
+          {instructorSettings.enabled && (
+              <div className="mt-4 flex items-center justify-end gap-2 text-indigo-700/60 text-sm">
+                <span>Instructor:</span>
+                {instructorSettings.mode === 'image' && instructorSettings.imageData ? (
+                    <img src={instructorSettings.imageData} alt="Sig" className="h-8 border border-indigo-200 rounded bg-white" />
+                ) : (
+                    <span className={`font-bold italic ${instructorSettings.fontStyle === 'artistic' ? 'font-artistic text-lg' : 'font-serif'}`}>
+                        {instructorSettings.name}
+                    </span>
+                )}
+              </div>
+          )}
       </div>
 
       {/* Detailed Breakdown */}

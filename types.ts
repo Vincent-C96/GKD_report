@@ -69,7 +69,9 @@ export interface GradeOptions {
 
 // Instructor Signature Settings
 export interface InstructorSettings {
+  enabled: boolean;  // Toggle to determine if signature should be applied
   mode: 'text' | 'image';
   name: string;      // The text name
+  fontStyle?: 'standard' | 'artistic'; // New font style option
   imageData?: string; // Base64 data URL for the image
 }

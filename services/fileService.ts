@@ -1,9 +1,10 @@
 import { FileType, GradingResult, InstructorSettings } from '../types';
 
 // Keywords to identify target locations in the document
-const SCORE_KEYWORDS = ['评分', '得分', '分数', 'Score', 'Grade', 'Points', 'Mark'];
-const COMMENT_KEYWORDS = ['评语', '老师评语', '教师评语', 'Comments', 'Feedback', 'Teacher Comments', 'Remarks'];
-const INSTRUCTOR_KEYWORDS = ['指导教师', '教师签名', '签名', 'Instructor', 'Teacher', 'Signature', 'Signed by'];
+// Sorted by length DESCENDING to prioritize longer matches (e.g. find "教师评语" before "评语")
+const SCORE_KEYWORDS = ['评分', '得分', '分数', 'Score', 'Grade', 'Points', 'Mark'].sort((a, b) => b.length - a.length);
+const COMMENT_KEYWORDS = ['Teacher Comments', '教师评语', '老师评语', '评语', '建议', '评价', 'Comments', 'Feedback', 'Remarks'].sort((a, b) => b.length - a.length);
+const INSTRUCTOR_KEYWORDS = ['指导教师', '教师签名', '签名', 'Instructor', 'Teacher', 'Signature', 'Signed by'].sort((a, b) => b.length - a.length);
 
 export const extractTextFromFile = async (file: File): Promise<string> => {
   const fileType = file.type || getMimeTypeFromExtension(file.name);
@@ -16,7 +17,7 @@ export const extractTextFromFile = async (file: File): Promise<string> => {
     } else if (fileType === FileType.PDF) {
       return await parsePdf(file);
     } else {
-      // Fallback based on extension if type is missing (common in extracted files)
+      // Fallback based on extension if type is missing
       if (file.name.endsWith('.docx')) return await parseWord(file);
       if (file.name.endsWith('.xlsx')) return await parseExcel(file);
       if (file.name.endsWith('.pdf')) return await parsePdf(file);
@@ -25,7 +26,6 @@ export const extractTextFromFile = async (file: File): Promise<string> => {
     }
   } catch (error) {
     console.error("Error extracting text:", error);
-    // Ensure we throw a proper Error object with a message
     throw new Error(error instanceof Error ? error.message : "Failed to read file content");
   }
 };
@@ -102,7 +102,6 @@ const parsePdf = async (file: File): Promise<string> => {
 export const extractFilesFromZip = async (zipFile: File): Promise<File[]> => {
   if (!window.JSZip) throw new Error("JSZip not loaded");
   
-  // Use the constructor approach which is safer for CDN builds
   const zip = new window.JSZip();
   let contents;
   try {
@@ -116,12 +115,9 @@ export const extractFilesFromZip = async (zipFile: File): Promise<File[]> => {
 
   for (const entry of entries) {
     if (entry.dir) continue;
-    
-    // Check extension
     const name = entry.name;
     const lowerName = name.toLowerCase();
     
-    // Ignore MACOSX artifacts and hidden files
     if (lowerName.includes('__macosx') || lowerName.startsWith('.')) continue;
 
     let type: string | null = null;
@@ -132,12 +128,8 @@ export const extractFilesFromZip = async (zipFile: File): Promise<File[]> => {
     if (!type) continue;
 
     try {
-        // Extract blob
         const blob = await entry.async('blob');
-        // Extract basename for cleaner UI
         const cleanName = name.split('/').pop() || name;
-        
-        // Create a new File object
         const file = new File([blob], cleanName, { type: type });
         files.push(file);
     } catch (e) {
@@ -147,44 +139,122 @@ export const extractFilesFromZip = async (zipFile: File): Promise<File[]> => {
   return files;
 };
 
-// --- Annotation & Blob Generation Logic ---
+// --- Image Generation (Canvas) ---
 
-// Returns a Blob of the annotated file
+interface TextImageOptions {
+    maxWidth?: number;
+    color?: string;
+    fontSize?: number;
+    fontFamily?: string;
+    isMultiLine?: boolean;
+}
+
+const createTextImage = (text: string, options: TextImageOptions = {}): { dataUrl: string, width: number, height: number } | null => {
+    if (!text) return null;
+    
+    const {
+        maxWidth = 800,
+        color = '#000000',
+        fontSize = 18, 
+        fontFamily = "'Microsoft YaHei', 'SimHei', 'SimSun', 'PingFang SC', 'Inter', sans-serif",
+        isMultiLine = false
+    } = options;
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    ctx.font = `${fontSize}px ${fontFamily}`;
+    
+    // 1. Line Breaking Logic
+    const lines: string[] = [];
+    if (isMultiLine) {
+        const characters = text.split('');
+        let currentLine = '';
+        
+        for (let i = 0; i < characters.length; i++) {
+            const char = characters[i];
+            const testLine = currentLine + char;
+            const metrics = ctx.measureText(testLine);
+            if (metrics.width > maxWidth && i > 0) {
+                lines.push(currentLine);
+                currentLine = char;
+            } else {
+                currentLine = testLine;
+            }
+        }
+        lines.push(currentLine);
+    } else {
+        lines.push(text);
+    }
+
+    // 2. Measure Canvas Size
+    let maxLineWidth = 0;
+    lines.forEach(line => {
+        const m = ctx.measureText(line);
+        if (m.width > maxLineWidth) maxLineWidth = m.width;
+    });
+
+    const lineHeight = fontSize * 1.4;
+    const canvasWidth = Math.ceil(maxLineWidth + 10);
+    const canvasHeight = Math.ceil(lines.length * lineHeight);
+
+    // 3. Set Canvas & Draw
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+    
+    ctx.font = `${fontSize}px ${fontFamily}`;
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = color;
+
+    lines.forEach((line, index) => {
+        ctx.fillText(line, 0, index * lineHeight);
+    });
+
+    return {
+        dataUrl: canvas.toDataURL('image/png'),
+        width: canvasWidth,
+        height: canvasHeight
+    };
+};
+
+const createSignatureImage = (text: string, isArtistic: boolean): string | null => {
+    const family = isArtistic 
+        ? "'Ma Shan Zheng', 'Dancing Script', 'Brush Script MT', cursive" 
+        : "'Inter', sans-serif";
+        
+    const result = createTextImage(text, {
+        fontSize: 48,
+        fontFamily: family,
+        color: '#000000'
+    });
+    return result ? result.dataUrl : null;
+};
+
+// --- Annotation Logic ---
+
 export const getAnnotatedFileBlob = async (file: File, result: GradingResult, instructor?: InstructorSettings): Promise<{ blob: Blob, extension: string }> => {
   const fileType = file.type || getMimeTypeFromExtension(file.name);
   let blob: Blob | null = null;
   let extension = '';
 
   try {
-    if (fileType === FileType.WORD) {
+    if (fileType === FileType.WORD || file.name.endsWith('.docx')) {
       blob = await annotateWord(file, result, instructor);
       extension = 'docx';
-    } else if (fileType === FileType.EXCEL) {
+    } else if (fileType === FileType.EXCEL || file.name.endsWith('.xlsx')) {
       blob = await annotateExcel(file, result, instructor);
       extension = 'xlsx';
-    } else if (fileType === FileType.PDF) {
+    } else if (fileType === FileType.PDF || file.name.endsWith('.pdf')) {
       blob = await annotatePdf(file, result, instructor);
       extension = 'pdf';
     } else {
-        // Double check extension if MIME type was lost (e.g. from zip extraction in some browsers)
-        if (file.name.endsWith('.docx')) {
-            blob = await annotateWord(file, result, instructor);
-            extension = 'docx';
-        } else if (file.name.endsWith('.xlsx')) {
-            blob = await annotateExcel(file, result, instructor);
-            extension = 'xlsx';
-        } else if (file.name.endsWith('.pdf')) {
-            blob = await annotatePdf(file, result, instructor);
-            extension = 'pdf';
-        } else {
-            throw new Error("Unsupported file type for annotation");
-        }
+        throw new Error("Unsupported file type for annotation");
     }
 
     return { blob, extension };
   } catch (e) {
     console.error("Failed to annotate file, falling back to PDF report:", e);
-    // Fallback: Generate generic PDF
     blob = generateReportPDFBlob(file.name, result, instructor);
     return { blob, extension: 'pdf' };
   }
@@ -198,7 +268,6 @@ const getMimeTypeFromExtension = (name: string): string => {
     return FileType.UNKNOWN;
 }
 
-// Original function wrapper for single download
 export const annotateAndDownloadFile = async (file: File, result: GradingResult, instructor?: InstructorSettings) => {
     const { blob, extension } = await getAnnotatedFileBlob(file, result, instructor);
     const link = document.createElement('a');
@@ -209,7 +278,6 @@ export const annotateAndDownloadFile = async (file: File, result: GradingResult,
     document.body.removeChild(link);
 };
 
-// Batch Download as Zip
 export const downloadBatchAsZip = async (items: { file: File, result: GradingResult }[], instructor?: InstructorSettings) => {
     if (!window.JSZip) throw new Error("JSZip not loaded");
     const zip = new window.JSZip();
@@ -242,7 +310,6 @@ const annotateWord = async (file: File, result: GradingResult, instructor?: Inst
   await zip.loadAsync(arrayBuffer);
   
   const docXml = await zip.file("word/document.xml")?.async("string");
-  
   if (!docXml) throw new Error("Invalid Docx");
 
   const parser = new DOMParser();
@@ -250,7 +317,6 @@ const annotateWord = async (file: File, result: GradingResult, instructor?: Inst
   
   const cells = xmlDoc.getElementsByTagName("w:tc");
   const paragraphs = xmlDoc.getElementsByTagName("w:p");
-  
   const modifiedNodes = new Set(); 
 
   // Check Table Cells
@@ -258,7 +324,6 @@ const annotateWord = async (file: File, result: GradingResult, instructor?: Inst
     const cell = cells[i];
     const textContent = cell.textContent || "";
     
-    // Score
     if (SCORE_KEYWORDS.some(k => textContent.includes(k))) {
       const nextCell = cell.nextElementSibling;
       if (nextCell && !modifiedNodes.has(nextCell)) {
@@ -266,8 +331,6 @@ const annotateWord = async (file: File, result: GradingResult, instructor?: Inst
         modifiedNodes.add(nextCell);
       }
     }
-
-    // Comments
     if (COMMENT_KEYWORDS.some(k => textContent.includes(k))) {
         const nextCell = cell.nextElementSibling;
         if (nextCell && !modifiedNodes.has(nextCell)) {
@@ -275,21 +338,18 @@ const annotateWord = async (file: File, result: GradingResult, instructor?: Inst
           modifiedNodes.add(nextCell);
         } 
     }
-
-    // Instructor Signature
-    if (instructor && INSTRUCTOR_KEYWORDS.some(k => textContent.includes(k))) {
+    if (instructor && instructor.enabled && INSTRUCTOR_KEYWORDS.some(k => textContent.includes(k))) {
         const nextCell = cell.nextElementSibling;
         if (nextCell && !modifiedNodes.has(nextCell)) {
-             // Word supports text insertion easily. Image insertion is complex via simple XML.
-             // We fallback to text name even if image mode is selected to avoid corruption.
              const signText = instructor.name || "AI Grader";
-             updateWordParagraph(xmlDoc, nextCell, signText, "000000");
+             const fontName = (instructor.fontStyle === 'artistic') ? 'KaiTi' : undefined;
+             updateWordParagraph(xmlDoc, nextCell, signText, "000000", fontName);
              modifiedNodes.add(nextCell);
         }
     }
   }
 
-  // Also check generic paragraphs if no tables found or missed
+  // Generic paragraphs
   for(let i=0; i<paragraphs.length; i++) {
       const p = paragraphs[i];
       const text = p.textContent || "";
@@ -311,43 +371,33 @@ const annotateWord = async (file: File, result: GradingResult, instructor?: Inst
   return await zip.generateAsync({ type: "blob", mimeType: FileType.WORD });
 };
 
-// Helper to update a Word paragraph while PRESERVING its properties (formatting)
-const updateWordParagraph = (doc: Document, parent: Element, text: string, colorHex: string) => {
-    // 1. Find the paragraph element
+const updateWordParagraph = (doc: Document, parent: Element, text: string, colorHex: string, fontName?: string) => {
     let p = parent.getElementsByTagName("w:p")[0];
-    
-    // If no paragraph exists in the element (e.g. empty cell), create one
     if (!p) {
         p = doc.createElementNS("http://schemas.openxmlformats.org/wordprocessingml/2006/main", "w:p");
         parent.appendChild(p);
     }
-
-    // 2. Extract existing Paragraph Properties (pPr) to preserve alignment/style
     const pPr = p.getElementsByTagName("w:pPr")[0];
-    
-    // 3. Clear all children of the paragraph
-    while (p.firstChild) {
-        p.removeChild(p.firstChild);
-    }
+    while (p.firstChild) { p.removeChild(p.firstChild); }
+    if (pPr) { p.appendChild(pPr); }
 
-    // 4. Restore pPr if it existed
-    if (pPr) {
-        p.appendChild(pPr);
-    }
-
-    // 5. Create the new Text Run
     const r = doc.createElementNS("http://schemas.openxmlformats.org/wordprocessingml/2006/main", "w:r");
     const rPr = doc.createElementNS("http://schemas.openxmlformats.org/wordprocessingml/2006/main", "w:rPr");
     
-    // Apply color
     const color = doc.createElementNS("http://schemas.openxmlformats.org/wordprocessingml/2006/main", "w:color");
     color.setAttribute("w:val", colorHex);
     rPr.appendChild(color);
 
-    // Support for Asian characters text node
+    if (fontName) {
+        const rFonts = doc.createElementNS("http://schemas.openxmlformats.org/wordprocessingml/2006/main", "w:rFonts");
+        rFonts.setAttribute("w:ascii", fontName);
+        rFonts.setAttribute("w:hAnsi", fontName);
+        rFonts.setAttribute("w:eastAsia", fontName);
+        rPr.appendChild(rFonts);
+    }
+
     const t = doc.createElementNS("http://schemas.openxmlformats.org/wordprocessingml/2006/main", "w:t");
     t.textContent = text;
-
     r.appendChild(rPr);
     r.appendChild(t);
     p.appendChild(r);
@@ -373,8 +423,6 @@ const annotateExcel = async (file: File, result: GradingResult, instructor?: Ins
                         
                         if (cell && cell.v) {
                             const val = String(cell.v);
-                            
-                            // Helper to write text to cell
                             const writeToNextCell = (text: string) => {
                                 const targetAddress = window.XLSX.utils.encode_cell({r: R, c: C + 1});
                                 const targetCell = sheet[targetAddress] || { t: 's', v: '' };
@@ -383,22 +431,15 @@ const annotateExcel = async (file: File, result: GradingResult, instructor?: Ins
                                 sheet[targetAddress] = targetCell;
                             };
 
-                            if (SCORE_KEYWORDS.some(k => val.includes(k))) {
-                                writeToNextCell(`${result.score}/100`);
-                            }
-
-                            if (COMMENT_KEYWORDS.some(k => val.includes(k))) {
-                                writeToNextCell(result.teacher_comment);
-                            }
-
-                            if (instructor && INSTRUCTOR_KEYWORDS.some(k => val.includes(k))) {
+                            if (SCORE_KEYWORDS.some(k => val.includes(k))) writeToNextCell(`${result.score}/100`);
+                            if (COMMENT_KEYWORDS.some(k => val.includes(k))) writeToNextCell(result.teacher_comment);
+                            if (instructor && instructor.enabled && INSTRUCTOR_KEYWORDS.some(k => val.includes(k))) {
                                 writeToNextCell(instructor.name || "AI Grader");
                             }
                         }
                     }
                 }
             });
-
             const wbout = window.XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
             resolve(new Blob([wbout], { type: FileType.EXCEL }));
         };
@@ -407,128 +448,262 @@ const annotateExcel = async (file: File, result: GradingResult, instructor?: Ins
     });
 };
 
+interface PdfLocation {
+    page: number;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    isVertical: boolean; // Flag to indicate vertical layout
+    type: 'score' | 'comment' | 'instructor';
+}
+
 const annotatePdf = async (file: File, result: GradingResult, instructor?: InstructorSettings): Promise<Blob> => {
     if (!window.pdfjsLib || !window.PDFLib) throw new Error("PDF libraries not loaded");
 
     const arrayBuffer = await file.arrayBuffer();
-    const locations: { page: number, x: number, y: number, type: 'score' | 'comment' | 'instructor' }[] = [];
-    
+    const locations: PdfLocation[] = [];
     const loadingTask = window.pdfjsLib.getDocument({ data: arrayBuffer.slice(0) });
     const pdf = await loadingTask.promise;
 
+    // Helper for collision detection
+    const isOverlapping = (r1: PdfLocation, r2: PdfLocation) => {
+        // Check if boxes intersect
+        return !(r2.x > r1.x + r1.width || 
+                 r2.x + r2.width < r1.x || 
+                 r2.y > r1.y + r1.height || 
+                 r2.y + r2.height < r1.y);
+    };
+
+    // Advanced Text Search with Bounding Boxes
     for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
         
+        // 1. Map all characters on the page
+        const charMap: { char: string, x: number, y: number, w: number, h: number }[] = [];
+        
         textContent.items.forEach((item: any) => {
             const str = item.str;
-            const transform = item.transform;
-            const x = transform[4];
-            const y = transform[5];
+            const x = item.transform[4];
+            const y = item.transform[5];
+            const w = item.width;
+            const h = item.height;
             
-            if (SCORE_KEYWORDS.some(k => str.includes(k))) {
-                locations.push({ page: i - 1, x, y, type: 'score' });
-            }
-            else if (COMMENT_KEYWORDS.some(k => str.includes(k))) {
-                locations.push({ page: i - 1, x, y, type: 'comment' });
-            }
-            else if (instructor && INSTRUCTOR_KEYWORDS.some(k => str.includes(k))) {
-                locations.push({ page: i - 1, x, y, type: 'instructor' });
+            // Approximate per-character width
+            const charW = w / str.length;
+            
+            for(let c = 0; c < str.length; c++) {
+                 charMap.push({
+                     char: str[c],
+                     x: x + (c * charW),
+                     y: y,
+                     w: charW,
+                     h: h
+                 });
             }
         });
+
+        const fullPageStr = charMap.map(c => c.char).join('');
+        
+        // 2. Helper to find locations
+        const findAndAdd = (keywords: string[], type: 'score' | 'comment' | 'instructor') => {
+            keywords.forEach(keyword => {
+                let startIndex = 0;
+                while(true) {
+                    const idx = fullPageStr.indexOf(keyword, startIndex);
+                    if (idx === -1) break;
+
+                    // Calculate Bounding Box of the found keyword
+                    const foundChars = charMap.slice(idx, idx + keyword.length);
+                    if (foundChars.length > 0) {
+                        const minX = Math.min(...foundChars.map(c => c.x));
+                        const maxX = Math.max(...foundChars.map(c => c.x + c.w));
+                        const minY = Math.min(...foundChars.map(c => c.y));
+                        const maxY = Math.max(...foundChars.map(c => c.y + c.h));
+                        
+                        const width = maxX - minX;
+                        const height = maxY - minY;
+
+                        // Heuristic: If height is significantly larger than width, it's vertical
+                        const isVertical = height > (width * 1.2);
+
+                        const candidateLoc: PdfLocation = {
+                            page: i - 1,
+                            x: minX,
+                            y: minY, 
+                            width,
+                            height,
+                            isVertical,
+                            type
+                        };
+
+                        // Check for overlap with existing locations on this page
+                        // Since keywords are sorted by length DESC, first match is best.
+                        // We skip if a better (longer) or existing match covers this area.
+                        const exists = locations.some(l => l.page === (i-1) && isOverlapping(l, candidateLoc));
+                        
+                        if (!exists) {
+                            locations.push(candidateLoc);
+                        }
+                    }
+                    startIndex = idx + 1;
+                }
+            });
+        };
+
+        findAndAdd(SCORE_KEYWORDS, 'score');
+        findAndAdd(COMMENT_KEYWORDS, 'comment');
+        if (instructor) findAndAdd(INSTRUCTOR_KEYWORDS, 'instructor');
     }
 
     const pdfDoc = await window.PDFLib.PDFDocument.load(arrayBuffer);
     const pages = pdfDoc.getPages();
     const { rgb } = window.PDFLib;
     
-    const font = await pdfDoc.embedFont(window.PDFLib.StandardFonts.HelveticaBold);
-    
-    // Embed signature image if available
+    // Embed assets
     let signatureImage = null;
-    if (instructor && instructor.mode === 'image' && instructor.imageData) {
-        try {
-            // Determine type from data URL
-            if (instructor.imageData.startsWith('data:image/png')) {
-                signatureImage = await pdfDoc.embedPng(instructor.imageData);
-            } else if (instructor.imageData.startsWith('data:image/jpeg') || instructor.imageData.startsWith('data:image/jpg')) {
-                signatureImage = await pdfDoc.embedJpg(instructor.imageData);
-            }
-        } catch (e) {
-            console.warn("Failed to embed signature image", e);
+    if (instructor && instructor.enabled) {
+        if (instructor.mode === 'image' && instructor.imageData) {
+            try {
+                if (instructor.imageData.startsWith('data:image/png')) signatureImage = await pdfDoc.embedPng(instructor.imageData);
+                else signatureImage = await pdfDoc.embedJpg(instructor.imageData);
+            } catch (e) { console.warn("Sig embed failed", e); }
+        } else if (instructor.mode === 'text' && instructor.name) {
+             const genDataUrl = createSignatureImage(instructor.name, instructor.fontStyle === 'artistic');
+             if (genDataUrl) signatureImage = await pdfDoc.embedPng(genDataUrl);
         }
     }
 
+    const scoreImgData = createTextImage(`${result.score}`, { fontSize: 36, color: '#FF0000', fontFamily: 'Arial, sans-serif' });
+    let scoreImage = scoreImgData ? await pdfDoc.embedPng(scoreImgData.dataUrl) : null;
+
+    // Process locations
     for (const loc of locations) {
         const page = pages[loc.page];
+        const { width, height } = page.getSize();
         
-        if (loc.type === 'score') {
-             page.drawRectangle({
-                x: loc.x + 45,
-                y: loc.y - 5,
-                width: 60,
-                height: 25,
-                color: rgb(1, 1, 1),
-                opacity: 1,
+        if (loc.type === 'score' && scoreImage && scoreImgData) {
+             const startX = loc.x + loc.width + 50;
+             const scale = 0.5;
+             // Removed white background rectangle
+             page.drawImage(scoreImage, {
+                x: startX,
+                y: loc.y,
+                width: scoreImgData.width * scale,
+                height: scoreImgData.height * scale
             });
-             page.drawText(`${result.score}`, { x: loc.x + 50, y: loc.y, size: 14, color: rgb(1, 0, 0), font });
         } 
         else if (loc.type === 'comment') {
-            const boxWidth = 350;
-            const boxHeight = 100;
-            page.drawRectangle({
-                x: loc.x + 75,
-                y: loc.y - boxHeight + 15,
-                width: boxWidth,
-                height: boxHeight,
-                color: rgb(1, 1, 1),
-                opacity: 1,
+            const pageW = width;
+            
+            // Fixed configuration as requested
+            const margin = 50;
+            const targetWidth = 350;
+
+            let drawX = 0;
+            let targetTopY = 0;
+
+            if (loc.isVertical) {
+                // VERTICAL LAYOUT
+                drawX = loc.x + loc.width + margin;
+                targetTopY = loc.y + loc.height;
+            } else {
+                // HORIZONTAL LAYOUT
+                drawX = loc.x + loc.width + margin;
+                targetTopY = loc.y + 10;
+            }
+            
+            // Check overflow
+            let finalWidth = targetWidth;
+            let moveDown = false;
+
+            if (drawX + targetWidth > pageW - 20) {
+                 moveDown = true;
+                 drawX = 40;
+                 finalWidth = pageW - 80; // Use full width if moved down
+            }
+
+            // Generate Image
+            const canvasMaxWidth = finalWidth * 2;
+            
+            const commentImgData = createTextImage(result.teacher_comment || "No comments generated.", { 
+                fontSize: 18, 
+                color: '#FF0000', 
+                maxWidth: canvasMaxWidth, 
+                isMultiLine: true 
             });
 
-            // Very primitive wrapping
-            const words = result.teacher_comment.split(''); 
-            let line = '';
-            let yOffset = 0;
-            for(const w of words) {
-                if (line.length > 40) {
-                     page.drawText(line, { x: loc.x + 80, y: loc.y - yOffset, size: 10, color: rgb(1, 0, 0), font });
-                     line = '';
-                     yOffset += 12;
-                }
-                line += w;
-            }
-            page.drawText(line, { x: loc.x + 80, y: loc.y - yOffset, size: 10, color: rgb(1, 0, 0), font });
-        }
-        else if (loc.type === 'instructor' && instructor) {
-            // If image mode and image loaded successfully
-            if (instructor.mode === 'image' && signatureImage) {
-                 // Draw Image
-                 const dims = signatureImage.scale(0.5); // Scale down 50% usually good
-                 // Ensure it doesn't exceed bounds
-                 const width = Math.min(dims.width, 100);
-                 const height = (width / dims.width) * dims.height;
+            if (commentImgData) {
+                const commentImage = await pdfDoc.embedPng(commentImgData.dataUrl);
+                const scale = 0.5;
+                const finalImageW = commentImgData.width * scale;
+                const finalImageH = commentImgData.height * scale;
 
-                 page.drawImage(signatureImage, {
-                    x: loc.x + 60,
-                    y: loc.y - 10,
-                    width: width,
-                    height: height,
-                 });
-            } else {
-                 // Draw Text Name
-                 const name = instructor.name || "AI Grader";
-                 page.drawText(name, { x: loc.x + 60, y: loc.y, size: 12, color: rgb(0, 0, 0), font });
+                let drawY = targetTopY - finalImageH; 
+
+                if (moveDown) {
+                    drawY = loc.y - 15 - finalImageH;
+                }
+
+                if (drawY < 30) {
+                    drawY = 30; 
+                }
+
+                // Removed white background rectangle
+                page.drawImage(commentImage, {
+                    x: drawX,
+                    y: drawY,
+                    width: finalImageW,
+                    height: finalImageH
+                });
             }
+        }
+        else if (loc.type === 'instructor' && instructor && instructor.enabled && signatureImage) {
+            const dims = signatureImage.scale(0.5);
+            const maxWidth = 150;
+            let w = dims.width;
+            let h = dims.height;
+            if (w > maxWidth) {
+                w = maxWidth;
+                h = (maxWidth / dims.width) * dims.height;
+            }
+            
+            page.drawImage(signatureImage, {
+                x: loc.x + loc.width + 20,
+                y: loc.y - 5,
+                width: w,
+                height: h,
+            });
         }
     }
     
+    // Fallback: If no locations found
     if (locations.length === 0) {
         const page = pdfDoc.addPage();
+        const font = await pdfDoc.embedFont(window.PDFLib.StandardFonts.HelveticaBold);
         page.drawText("Grading Report", { x: 50, y: 700, size: 20, font });
-        page.drawText(`Score: ${result.score}`, { x: 50, y: 650, size: 14, color: rgb(1, 0, 0), font });
-        page.drawText(`Comment: (See dashboard for full text)`, { x: 50, y: 620, size: 12, font });
-        if (instructor) {
-            page.drawText(`Instructor: ${instructor.name}`, { x: 50, y: 590, size: 12, font });
+        
+        if (scoreImage && scoreImgData) {
+            page.drawText("Score:", { x: 50, y: 650, size: 14, color: rgb(0,0,0), font });
+            page.drawImage(scoreImage, { x: 100, y: 650, width: scoreImgData.width * 0.5, height: scoreImgData.height * 0.5 });
+        }
+        
+         const fbCommentImgData = createTextImage(result.teacher_comment || "No comments.", { 
+            fontSize: 18, 
+            color: '#FF0000', 
+            maxWidth: 1000, 
+            isMultiLine: true 
+        });
+        if (fbCommentImgData) {
+            const fbCommentImage = await pdfDoc.embedPng(fbCommentImgData.dataUrl);
+            page.drawText("Comments:", { x: 50, y: 600, size: 14, font });
+            page.drawImage(fbCommentImage, { x: 50, y: 580 - (fbCommentImgData.height*0.5), width: fbCommentImgData.width * 0.5, height: fbCommentImgData.height * 0.5 });
+        }
+
+        if (instructor && instructor.enabled && signatureImage) {
+             page.drawText(`Instructor:`, { x: 50, y: 400, size: 12, font });
+             page.drawImage(signatureImage, { x: 120, y: 390, width: 100, height: 50 });
         }
     }
 
@@ -536,12 +711,8 @@ const annotatePdf = async (file: File, result: GradingResult, instructor?: Instr
     return new Blob([pdfBytes], { type: FileType.PDF });
 };
 
-// Return a Blob for generic reports
 const generateReportPDFBlob = (originalFileName: string, result: any, instructor?: InstructorSettings): Blob => {
-  if (!window.jspdf) {
-    throw new Error("jsPDF not loaded");
-  }
-  
+  if (!window.jspdf) throw new Error("jsPDF not loaded");
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();
   
@@ -553,20 +724,15 @@ const generateReportPDFBlob = (originalFileName: string, result: any, instructor
   doc.text(`File: ${originalFileName}`, 14, 30);
   
   doc.text(`Score: ${result.score}`, 14, 45);
-  // Split long summary
   const summaryLines = doc.splitTextToSize(result.summary, 180);
   doc.text(summaryLines, 14, 55);
 
-  if (instructor) {
+  if (instructor && instructor.enabled) {
       doc.text(`Instructor: ${instructor.name}`, 14, 100);
-      // Basic image support for JSPDF fallback
       if (instructor.mode === 'image' && instructor.imageData) {
-          try {
-             doc.addImage(instructor.imageData, 'PNG', 14, 110, 40, 20);
-          } catch(e) {}
+          try { doc.addImage(instructor.imageData, 'PNG', 14, 110, 40, 20); } catch(e) {}
       }
   }
-
   return doc.output('blob');
 };
 
